@@ -1,0 +1,190 @@
+---
+title: "Citibike Data Analysis"
+author: "Aidan Pecorale"
+date: "2/21/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+if (!require("knitr")) {
+  install.packages("knitr") # do this once per lifetime
+  require("knitr") # do this once per session
+}
+library("tidyverse")
+library("tidyquant")
+library("corrplot")
+library("GGally")
+library("ggplot2")
+library("dplyr")
+```
+
+## R Markdown
+
+This is a work space for some exploratory Data Analysis of CitiBike data from May of 2021. A full slide deck will be attached in git repository. 
+
+```{r bikeDF}
+## loading data
+bikeDF <- read.csv('JC-202105-citibike-tripdata.csv')
+attach(bikeDF)
+
+```
+## Question 1
+
+What stations have the most number of interactions? Is it tourist spots or something else?
+
+```{r}
+tempdf1 <- count(bikeDF, start_station_name)
+colnames(tempdf1) <- c('station_id', 'num_departures')
+tempdf2 <- count(bikeDF, end_station_name)
+colnames(tempdf2) <- c('station_id', 'num_arrivals')
+stationDF <- full_join(tempdf1, tempdf2, by='station_id')
+stationDF <-  filter(stationDF, abs(num_departures + num_arrivals) > 2440)
+
+
+
+ggplot(data=stationDF, aes(x=station_id, y=num_departures + num_arrivals)) +
+geom_bar(stat="identity", fill='blue', ) + ylab('Num Interactions') + xlab('Station Name') +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+## Question 2
+
+What stations are responsible for biggest differences in # of departures vs # of arrivals. Can give a relative idea of what stations have bike sinks or overflow.
+
+```{r}
+tempdf1 <- count(bikeDF, start_station_name)
+colnames(tempdf1) <- c('station_id', 'num_departures')
+tempdf2 <- count(bikeDF, end_station_name)
+colnames(tempdf2) <- c('station_id', 'num_arrivals')
+stationDF <- full_join(tempdf1, tempdf2, by='station_id')
+stationDF <- filter(stationDF, abs(num_departures - num_arrivals) > 50)
+stationDF <- pivot_longer(stationDF, cols = 2:3, names_to ="type",
+ values_to = "count")
+
+ggplot(data=stationDF, aes(x=station_id, y=count, fill=type)) +
+geom_bar(stat="identity", position=position_dodge()) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+## Question 3
+What days and hours were bikes most often used?
+
+```{r}
+
+timeTrips <- separate(bikeDF, started_at, sep=" ", into = c("date", "time"))
+timeTrips <- separate(timeTrips, date, sep="-", into = c("year", "month", "day"))
+timeTrips <- separate(timeTrips, time, sep=":", into = c("hour", "min", "sec"))
+otherTimeTrips <- timeTrips
+timeTrips <- unite(timeTrips, day, hour, col="DayHour", sep="_")
+
+
+timeTrips <- timeTrips %>% group_by(DayHour) %>% count(DayHour)
+timeTrips <- separate(timeTrips, DayHour, sep="_", into = c("day", "hour"))
+
+
+ggplot(timeTrips, aes(hour, day, fill=n)) + 
+  geom_tile() + scale_fill_gradient(low='white', high='purple')
+
+
+```
+We can see more heavy usage between 5-6 possibly from commuters?
+We can also observe more heavy usage through out the day on weekends ex: 15th/16th and 22nd/23rd which could be tourists or general more people having off. We can also potentially cross reference this data with the weather for each day and possibly find a correlation with that. For example looking at weather reports in the city May 29th and 30th were rainy and we can see that reflected in the lighter colors across the day despite being considered more busy weekend days.
+Of course this is a samll sample size but it would be interesting to see if these trends continued over a larger dataset.
+
+##Question 4
+Are most of the riders casual or members?
+
+```{r}
+
+countSub <- count(bikeDF, member_casual)
+
+ggplot(countSub, aes(x='', y=n, fill=member_casual)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0)
+
+```
+It looks like its a pretty equal split between the two riders with members edging out casual riders by a bit. But later on we will see that this data may not be completely accurate. 
+
+
+## Question 5 
+What days do members or casual riders ride more? Hypothesis is that there will be higher number of casual riders on the weekends as opposed to the week days. 
+
+```{r}
+
+df <- otherTimeTrips %>% group_by(day, member_casual) %>% count(day)
+
+ggplot(data=df, aes(x=day, y=n, group=member_casual)) +
+  geom_line(aes(color=member_casual))+
+  geom_point()
+
+```
+For the most part this hypothesis is correct. It seems that causal riders out biked members on the two biggest weekends we saw before (15th/16th and 22nd/23rd). Another thing we can see is that casual rider drop off much more during bad weather days than members who may require the bikes as part of their transportation to and from work as seen on the 3rd, 5th and 24th. 
+Lastly to address the large anomaly on the 18th and 19th we see that there were almost no member riders that day. Upon closer inspection an Amazon outage took city bikes off line on 18/19th so most riders were counted as casual riders. These two days may have affected the total percentage of members/casual riders and skewed the numbers.
+
+
+## Question 6
+
+How long do riders spend on bike (broken into members and casual riders)?
+
+```{r}
+totalTimeTrips <- bikeDF
+totalTimeTrips["total_time"] <- round(difftime(ended_at, started_at, units="mins"))
+
+totalTimeTrips['time_cat'] <- NA
+
+for (i in 1:nrow(totalTimeTrips)){
+     
+
+    if(totalTimeTrips[i,14] <= 15){
+
+        totalTimeTrips[i,15] <- '15 mins or Less'
+    }
+      if(totalTimeTrips[i,14] <= 30 && totalTimeTrips[i,14] > 15){
+              
+            # changing the row value in the 
+            # data frame
+            totalTimeTrips[i,15] <- 'Between 15 and 30 mins'
+        }
+  if(totalTimeTrips[i,14] <= 45 && totalTimeTrips[i,14] > 30){
+              
+            # changing the row value in the 
+            # data frame
+            totalTimeTrips[i,15] <- 'Between 30 and 45 mins'
+  }
+  if(totalTimeTrips[i,14] <= 60 && totalTimeTrips[i,14] > 45){
+              
+            # changing the row value in the 
+            # data frame
+            totalTimeTrips[i,15] <- 'Between 45 and 60 mins'
+        }
+  if(totalTimeTrips[i,14] > 60){
+              
+            # changing the row value in the 
+            # data frame
+            totalTimeTrips[i,15] <- 'Greater than 60 mins'
+        }
+}
+
+
+
+```
+```{r}
+
+tempTimeCats1 <- count(filter(totalTimeTrips, member_casual == 'member'), time_cat)
+colnames(tempTimeCats1) <- c('Time_Used', 'Members')
+tempTimeCats2 <- count(filter(totalTimeTrips, member_casual == 'casual'), time_cat)
+colnames(tempTimeCats2) <- c('Time_Used', 'Casual_Users')
+
+
+timeCats <- full_join(tempTimeCats1, tempTimeCats2, by='Time_Used')
+timeCats <- pivot_longer(timeCats, cols = 2:3, names_to ="User",
+ values_to = "Number_Users")
+
+ggplot(data=timeCats, aes(x=Time_Used, y=Number_Users, fill=User)) +
+geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+We can see that most trips are 15 mins or less. Casual Members get 30 mins free and have to pay overages on any time past that, while Members get 45 mins free. Interestingly we see that the higher groups are mostly filled with casual members incurring fees.
